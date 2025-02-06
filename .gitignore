@@ -1,0 +1,36 @@
+# Node.js dependencies
+node_modules/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build output directories
+dist/
+build/
+
+# Coverage directory (bijvoorbeeld gebruikt door istanbul)
+coverage/
+
+# Tijdelijke bestanden en runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Directory voor instrumented libs (indien van toepassing)
+lib-cov/
+
+# Omgevingsvariabelen en geheime bestanden
+.env
+
+# Editor- en IDE-specifieke bestanden
+.DS_Store
+.idea/
+.vscode/
+
+# OS-specifieke bestanden
+Thumbs.db
