@@ -1,20 +1,25 @@
 // app.js
 
-// Maak verbinding met de Socket.IO-server op poort 3000
+// Bepaal het clienttype via de URL-parameter (default: mobile)
+const urlParams = new URLSearchParams(window.location.search);
+const clientType = urlParams.get('client') === 'tv' ? 'tv' : 'mobile';
+
+console.log(`Client type: ${clientType}`);
+
+// Maak verbinding met de Socket.IO-server (dezelfde voor beide clienttypes)
 const socket = io('http://localhost:3000');
 
-// Element waarin de scenes worden geladen
+// Container voor scenes
 const appContainer = document.getElementById('app');
 
-// Globale variabele voor de lobbycode (wordt ingesteld nadat join succesvol is)
+// Globale variabele voor de lobbycode
 let lobbyCodeGlobal = null;
 
 /**
- * Laad een scene (HTML-file) dynamisch uit de map 'scenes'.
- * sceneName is de naam van de scene (bijv. 'home', 'lobby', 'countdown', 'game', 'score')
+ * Laad een scene uit de map 'scenes/{clientType}/{sceneName}.html'
  */
 function loadScene(sceneName) {
-  fetch(`scenes/${sceneName}.html`)
+  fetch(`scenes/${clientType}/${sceneName}.html`)
     .then(response => {
       if (!response.ok) {
         throw new Error(`Kan scene "${sceneName}" niet laden`);
@@ -23,7 +28,6 @@ function loadScene(sceneName) {
     })
     .then(html => {
       appContainer.innerHTML = html;
-      // Na het laden initialiseer je de scene-specifieke functionaliteit.
       initScene(sceneName);
     })
     .catch(err => {
@@ -33,41 +37,53 @@ function loadScene(sceneName) {
 }
 
 /**
- * Initialiseer de scene-specifieke logica op basis van sceneNaam.
+ * Initialiseer scene-specifieke logica
  */
 function initScene(sceneName) {
   if (sceneName === 'home') {
-    // Home scene: toon formulier voor spelernaam en lobbycode
-    const joinForm = document.getElementById('joinForm');
-    joinForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const playerName = document.getElementById('playerName').value;
-      const lobbyCode = document.getElementById('lobbyCode').value;
-      socket.emit('joinLobby', { name: playerName, lobbyCode: lobbyCode });
-    });
-    // Luister naar bevestiging dat de lobby succesvol is gejoined
-    socket.on('lobbyJoined', (data) => {
-      lobbyCodeGlobal = data.lobbyCode;
-      console.log(`Lobby succesvol gejoined: ${lobbyCodeGlobal}`);
-      loadScene('lobby');
-    });
-    // Foutafhandeling voor ongeldige lobbycode
-    socket.on('lobbyError', (error) => {
-      alert('Fout: ' + error.message);
-    });
+    // Home scene
+    if (clientType === 'tv') {
+      // TV-home: alleen knop om een lobby aan te maken
+      const createBtn = document.getElementById('createLobbyBtn');
+      createBtn.addEventListener('click', () => {
+        socket.emit('createLobby');
+      });
+      // Luister naar 'lobbyCreated'
+      socket.on('lobbyCreated', (data) => {
+        lobbyCodeGlobal = data.lobbyCode;
+        console.log(`Lobby aangemaakt: ${lobbyCodeGlobal}`);
+        loadScene('lobby');
+      });
+    } else {
+      // Mobile-home: speler vult alleen zijn naam in
+      const joinForm = document.getElementById('joinForm');
+      joinForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const playerName = document.getElementById('playerName').value;
+        // Voor mobiele spelers gaat de joinLobby zonder invoer van lobbycode
+        socket.emit('joinLobby', { name: playerName });
+      });
+      socket.on('lobbyJoined', (data) => {
+        lobbyCodeGlobal = data.lobbyCode;
+        console.log(`Speler joined lobby: ${lobbyCodeGlobal}`);
+        loadScene('lobby');
+      });
+      socket.on('lobbyError', (error) => {
+        alert('Fout: ' + error.message);
+      });
+    }
   } else if (sceneName === 'lobby') {
-    // Lobby scene: toon de lobbynaam en spelerslijst
-    const lobbyNameElem = document.getElementById('lobbyName');
-    lobbyNameElem.textContent = `Lobby: ${lobbyCodeGlobal || 'Onbekend'}`;
-    // Voor de host: knop om het spel te starten
-    const startBtn = document.getElementById('startGameBtn');
-    if (startBtn) {
+    // Lobby scene: toon de lobbycode en spelerslijst
+    document.getElementById('lobbyName').textContent = `Lobby: ${lobbyCodeGlobal || 'Onbekend'}`;
+    // Voor tv: startknop om het spel te starten
+    if (clientType === 'tv') {
+      const startBtn = document.getElementById('startGameBtn');
       startBtn.addEventListener('click', () => {
         socket.emit('startGame');
       });
     }
   } else if (sceneName === 'countdown') {
-    // Countdown scene: start een 3-seconden countdown en speel een notificatiegeluid
+    // Countdown scene: 3 seconden countdown
     const countdownElement = document.getElementById('countdown');
     let count = 3;
     countdownElement.textContent = count;
@@ -82,20 +98,21 @@ function initScene(sceneName) {
       }
     }, 1000);
   } else if (sceneName === 'game') {
-    // Game scene: initialiseer gameplay
-    // Verwacht de volgende elementen in game.html:
-    // - Een div met id="block" (waar het blok verschijnt)
-    // - Een knop met id="clickButton" (om op het blok te klikken)
-    // - Een element met id="gameTimer" (voor de resterende tijd)
+    // Game scene: gameplay
+    // Verwacht:
+    // - Een div met id="block"
+    // - Een element met id="gameTimer"
+    // - Op mobile: een knop met id="clickButton"
     const blockDiv = document.getElementById('block');
-    const clickButton = document.getElementById('clickButton');
     const gameTimer = document.getElementById('gameTimer');
-
-    clickButton.addEventListener('click', () => {
-      socket.emit('clientClick');
-    });
-
-    // Luister naar server-events voor het tonen en verbergen van het blok
+    
+    if (clientType === 'mobile') {
+      const clickButton = document.getElementById('clickButton');
+      clickButton.addEventListener('click', () => {
+        socket.emit('clientClick');
+      });
+    }
+    // Luister naar server-events voor het tonen/verbergen van blokken
     socket.on('blockAppear', (data) => {
       blockDiv.style.display = 'block';
       blockDiv.style.backgroundColor = (data.type === 'orange') ? 'orange' : 'gray';
@@ -105,8 +122,8 @@ function initScene(sceneName) {
       blockDiv.style.display = 'none';
       console.log('Blok verdwijnt');
     });
-
-    // Start de game-timer van 60 seconden
+    
+    // Start een timer van 60 seconden
     let timeLeft = 60;
     gameTimer.textContent = timeLeft;
     const timerInterval = setInterval(() => {
@@ -118,18 +135,43 @@ function initScene(sceneName) {
       }
     }, 1000);
   } else if (sceneName === 'score') {
-    // Score scene: na 20 seconden terug naar de lobby
+    // Score scene: toon de scores gesorteerd van hoog naar laag, met de winnaar prominent
+    // We verwachten dat de server via 'scoreUpdate' de scores stuurt
+    socket.on('scoreUpdate', (scores) => {
+      // scores is een object: { socketId: { name, score } }
+      // Zet dit om naar een array en sorteer op score (aflopend)
+      const playersArray = Object.values(scores).sort((a, b) => b.score - a.score);
+      const scoreList = document.getElementById('scoreList');
+      scoreList.innerHTML = '';
+      if (playersArray.length > 0) {
+        // Maak de winnaar extra groot
+        const winner = playersArray[0];
+        const winnerItem = document.createElement('li');
+        winnerItem.innerHTML = `<strong style="font-size:2em;">Winner: ${winner.name} - ${winner.score}</strong>`;
+        scoreList.appendChild(winnerItem);
+        // Voeg de overige spelers toe
+        for (let i = 1; i < playersArray.length; i++) {
+          const li = document.createElement('li');
+          li.textContent = `${playersArray[i].name} - ${playersArray[i].score}`;
+          scoreList.appendChild(li);
+        }
+      }
+    });
+    // Na 20 seconden keer je terug naar de lobby (alle clients)
     setTimeout(() => {
       loadScene('lobby');
     }, 20000);
   }
 }
 
-// Luister naar globale Socket.IO events om de spelerslijst in de lobby te updaten
+// Globale Socket.IO event listeners
+
+// Lobby-update: update de spelerslijst in de lobby scene
 socket.on('lobbyUpdate', (players) => {
   const listElem = document.getElementById('playersList');
   if (listElem) {
     listElem.innerHTML = '';
+    // Sorteer de spelers eventueel op naam of volgorde (hier gewoon in willekeurige volgorde)
     for (const id in players) {
       const li = document.createElement('li');
       li.textContent = `${players[id].name} - Score: ${players[id].score}`;
@@ -138,9 +180,9 @@ socket.on('lobbyUpdate', (players) => {
   }
 });
 
-// Belangrijk: Luister naar het 'gameStarted'-event zodat de client de countdown laadt
+// Wanneer de server aangeeft dat het spel gestart is, laadt alle clients de countdown scene
 socket.on('gameStarted', () => {
-  console.log('Game is gestart (vanuit de server)');
+  console.log('Game gestart (vanuit server)');
   loadScene('countdown');
 });
 
