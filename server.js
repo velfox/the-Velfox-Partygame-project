@@ -56,13 +56,13 @@ io.on('connection', (socket) => {
 
   // Event: Een speler probeert de lobby te joinen
   socket.on('joinLobby', (data) => {
-    // Controleer of de ingevoerde lobbycode overeenkomt met de huidige code
     if (data.lobbyCode === currentLobbyCode) {
       players[socket.id] = { name: data.name, score: 0 };
       console.log(`${data.name} is de lobby binnengekomen.`);
       io.emit('lobbyUpdate', players);
+      // Stuur een bevestiging naar de client die de join heeft geprobeerd
+      socket.emit('lobbyJoined', { lobbyCode: currentLobbyCode });
     } else {
-      // Fout: lobbycode klopt niet
       socket.emit('lobbyError', { message: 'Ongeldige lobby code.' });
       console.log(`Lobby join poging mislukt voor ${data.name}. Ingevoerde code: ${data.lobbyCode}`);
     }

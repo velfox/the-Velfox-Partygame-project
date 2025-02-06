@@ -2,67 +2,17 @@
 <html lang="nl">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Game Lobby</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Game SPA</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="container">
-    <h1>Game Lobby</h1>
-    <form id="joinForm">
-      <div class="form-group">
-        <label for="playerName">Naam:</label>
-        <input type="text" id="playerName" name="playerName" placeholder="Voer je naam in" required>
-      </div>
-      <div class="form-group">
-        <label for="lobbyCode">Lobby Code:</label>
-        <input type="text" id="lobbyCode" name="lobbyCode" placeholder="Voer lobby code in" required>
-      </div>
-      <button type="submit">Verbind</button>
-    </form>
-    <div id="lobbyStatus"></div>
-    <div id="errorMessage" style="color: red; margin-top: 10px;"></div>
-  </div>
+  <!-- Container waar de scenes dynamisch in worden geladen -->
+  <div id="app"></div>
   
   <!-- Laad de Socket.IO client vanaf de Node.js-server op poort 3000 -->
   <script src="http://localhost:3000/socket.io/socket.io.js"></script>
-  <script>
-    const errorMessageDiv = document.getElementById('errorMessage');
-    // Maak verbinding met de Socket.IO-server op poort 3000
-    const socket = io('http://localhost:3000');
-
-    // Foutafhandeling als de client geen verbinding kan maken met de server
-    socket.on('connect_error', (err) => {
-      errorMessageDiv.textContent = 'Kan geen verbinding maken met de server. Probeer het later opnieuw.';
-    });
-
-    // Foutafhandeling voor een ongeldige lobbycode
-    socket.on('lobbyError', (error) => {
-      errorMessageDiv.textContent = 'Fout: ' + error.message;
-    });
-
-    // Verwerk het join-formulier
-    const joinForm = document.getElementById('joinForm');
-    joinForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      errorMessageDiv.textContent = ''; // Verwijder eventuele vorige foutmeldingen
-      const playerName = document.getElementById('playerName').value;
-      const lobbyCode = document.getElementById('lobbyCode').value;
-      socket.emit('joinLobby', { name: playerName, lobbyCode: lobbyCode });
-    });
-
-    // Update de lobbyweergave wanneer de server een update stuurt
-    socket.on('lobbyUpdate', (players) => {
-      const lobbyStatus = document.getElementById('lobbyStatus');
-      lobbyStatus.innerHTML = "<h2>Spelers in de Lobby:</h2>";
-      const ul = document.createElement('ul');
-      for (const id in players) {
-        const li = document.createElement('li');
-        li.textContent = players[id].name + " - Score: " + players[id].score;
-        ul.appendChild(li);
-      }
-      lobbyStatus.appendChild(ul);
-    });
-  </script>
+  <!-- Hoofdscript voor de SPA -->
+  <script src="app.js"></script>
 </body>
 </html>
