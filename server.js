@@ -1,152 +1,268 @@
 // server.js
 
-// Modules importeren
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 
-// Express-app en HTTP-server opzetten
+const port = 3000;
 const app = express();
 const server = http.createServer(app);
-
-// Socket.IO initialiseren op de HTTP-server
-// Voeg CORS-instellingen toe zodat verzoeken van http://127.0.0.1:5500 toegestaan worden
 const io = socketIo(server, {
-    cors: {
-      origin: "*",  // Of vervang door "*" om alle origins toe te staan
-      methods: ["GET", "POST"],
-      credentials: true
-    }
-  });
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
 
-// In-memory opslag voor spelers en spelstatus
-let players = {};  // Bijvoorbeeld: { socketId: { name: string, score: number } }
-let gameStarted = false;
-let currentBlock = null; // Kan 'orange' of 'decoy' zijn
-let blockActive = false;
-let blockTimeout = null;
+// --- Optional Authentication Middleware ---
+// This middleware requires that a query parameter "token" equals "UNITY".
+io.use((socket, next) => {
+  if (socket.handshake.query.token === "UNITY") {
+    next();
+  } else {
+    next(new Error("Authentication error"));
+  }
+});
 
-// Variabele voor de huidige lobbycode
-let currentLobbyCode = null;
+// --- Lobby Storage ---
+// Store lobbies in an object, keyed by lobby code.
+let lobbies = {}; // Each lobby is an object with properties below.
 
-// Functie om een willekeurige lobby-ID te genereren (standaard 6 tekens)
+// Lobby structure:
+// {
+//   code: string,
+//   tvSocketId: string,          // Socket ID of the TV (host) that created the lobby.
+//   players: { [socketId]: { name: string, score: number } },
+//   gameStarted: boolean,
+//   currentBlock: string,        // "orange" or "decoy"
+//   blockActive: boolean,
+//   blockTimeout: Timeout reference
+// }
+
+// Generate a random lobby code (default 6 characters)
 function generateLobbyId(length = 6) {
   let result = '';
   const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  const charactersLength = characters.length;
   for (let i = 0; i < length; i++) {
-    result += characters.charAt(Math.floor(Math.random() * charactersLength));
+    result += characters.charAt(Math.floor(Math.random() * characters.length));
   }
   return result;
 }
 
-// Serveer statische bestanden vanuit de map 'public'
-app.use(express.static('public'));
+// Helper to log current server stats
+function logServerStats() {
+  let lobbyCount = Object.keys(lobbies).length;
+  let totalPlayers = 0;
+  for (let code in lobbies) {
+    totalPlayers += Object.keys(lobbies[code].players).length;
+  }
+  console.log(`Server Stats: ${lobbyCount} active lobby(ies), ${totalPlayers} player(s) connected.`);
+}
 
-// Socket.IO events
-io.on('connection', (socket) => {
-  console.log(`Client verbonden: ${socket.id}`);
-  
-  // Event: Lobby genereren via de socket (bijvoorbeeld vanuit een admin-UI)
-  socket.on('generateLobby', () => {
-    currentLobbyCode = generateLobbyId();
-    console.log(`Nieuwe lobby gegenereerd via socket: ${currentLobbyCode}`);
-    socket.emit('lobbyGenerated', { lobbyCode: currentLobbyCode });
+// Socket.IO connection handling
+io.on('connection', socket => {
+  console.log(`Client connected: ${socket.id}`);
+
+  // --- TV Client creates a lobby ---
+  socket.on('createLobby', data => {
+    const lobbyCode = generateLobbyId();
+    // Create a new lobby object
+    lobbies[lobbyCode] = {
+      code: lobbyCode,
+      tvSocketId: socket.id,
+      players: {},
+      gameStarted: false,
+      currentBlock: null,
+      blockActive: false,
+      blockTimeout: null
+    };
+    // Add the TV client to a room with the lobby code
+    socket.join(lobbyCode);
+    console.log(`Lobby [${lobbyCode}] created by TV ${socket.id}`);
+    socket.emit('lobbyCreated', lobbyCode);
+    io.to(lobbyCode).emit('lobbyUpdate', getPlayersListString(lobbies[lobbyCode]));
+    logServerStats();
   });
 
-  // Event: Een speler probeert de lobby te joinen
-  socket.on('joinLobby', (data) => {
-    if (data.lobbyCode === currentLobbyCode) {
-      players[socket.id] = { name: data.name, score: 0 };
-      console.log(`${data.name} is de lobby binnengekomen.`);
-      io.emit('lobbyUpdate', players);
-      // Stuur een bevestiging naar de client die de join heeft geprobeerd
-      socket.emit('lobbyJoined', { lobbyCode: currentLobbyCode });
-    } else {
-      socket.emit('lobbyError', { message: 'Ongeldige lobby code.' });
-      console.log(`Lobby join poging mislukt voor ${data.name}. Ingevoerde code: ${data.lobbyCode}`);
+  // --- Mobile client joins a lobby ---
+  socket.on('joinLobby', data => {
+    // Expect data: { name: string, lobbyCode: string }
+    if (!data.lobbyCode) {
+      socket.emit('lobbyError', { message: 'No lobby code provided.' });
+      console.log(`Join failed for ${data.name}: no lobby code provided.`);
+      return;
     }
+    let lobby = lobbies[data.lobbyCode];
+    if (!lobby) {
+      socket.emit('lobbyError', { message: 'Lobby does not exist.' });
+      console.log(`Join failed for ${data.name}: lobby ${data.lobbyCode} does not exist.`);
+      return;
+    }
+    // Add the mobile player to the lobby and join the corresponding room.
+    lobby.players[socket.id] = { name: data.name, score: 0 };
+    socket.join(lobby.code);
+    console.log(`${data.name} joined lobby ${lobby.code}`);
+    io.to(lobby.code).emit('lobbyUpdate', getPlayersListString(lobby));
+    socket.emit('lobbyJoined', lobby.code);
+    logServerStats();
   });
 
-  // Event: Spel starten (bijv. door de host)
+  // --- TV Client starts the game ---
   socket.on('startGame', () => {
-    if (!gameStarted) {
-      gameStarted = true;
-      io.emit('gameStarted');
-      console.log('Het spel is gestart.');
-      startRound();
+    // Identify the lobby by checking if the socket is the TV host.
+    let lobby = null;
+    for (let code in lobbies) {
+      if (lobbies[code].tvSocketId === socket.id) {
+        lobby = lobbies[code];
+        break;
+      }
+    }
+    if (!lobby) {
+      socket.emit('lobbyError', { message: 'You are not the lobby host.' });
+      return;
+    }
+    if (!lobby.gameStarted) {
+      lobby.gameStarted = true;
+      console.log(`Game started in lobby ${lobby.code}`);
+      io.to(lobby.code).emit('gameStarted');
+      startRound(lobby);
     }
   });
 
-  // Event: Een speler klikt tijdens het spel
+  // --- Mobile client sends a click event during the game ---
   socket.on('clientClick', () => {
-    if (blockActive && currentBlock === 'orange') {
-      players[socket.id].score += 1;
-      io.emit('scoreUpdate', players);
-      blockActive = false;
-      clearTimeout(blockTimeout);
-      io.emit('blockClicked', { winner: players[socket.id].name });
-      console.log(`${players[socket.id].name} heeft op een oranje blok geklikt.`);
+    let lobby = getLobbyBySocket(socket.id);
+    if (!lobby || !lobby.blockActive) return;
+    if (lobby.currentBlock === "orange") {
+      if (lobby.players[socket.id]) {
+        lobby.players[socket.id].score += 1;
+        io.to(lobby.code).emit('scoreUpdate', lobby.players);
+        io.to(lobby.code).emit('scorePopup', { playerName: lobby.players[socket.id].name, points: "+1" });
+        console.log(`${lobby.players[socket.id].name} scored +1 in lobby ${lobby.code}`);
+      }
+    } else if (lobby.currentBlock === "decoy") {
+      if (lobby.players[socket.id]) {
+        lobby.players[socket.id].score -= 1;
+        io.to(lobby.code).emit('scoreUpdate', lobby.players);
+        io.to(lobby.code).emit('scorePopup', { playerName: lobby.players[socket.id].name, points: "-1" });
+        console.log(`${lobby.players[socket.id].name} scored -1 in lobby ${lobby.code}`);
+      }
     }
+    // Hide the block immediately and cancel the timeout.
+    lobby.blockActive = false;
+    if (lobby.blockTimeout) clearTimeout(lobby.blockTimeout);
+    io.to(lobby.code).emit('blockDisappear', { blockType: lobby.currentBlock });
   });
 
-  // Event: Een client verbreekt de verbinding
+  // --- On disconnect, remove player or close lobby ---
   socket.on('disconnect', () => {
-    console.log(`Client verbroken: ${socket.id}`);
-    delete players[socket.id];
-    io.emit('lobbyUpdate', players);
+    console.log(`Client disconnected: ${socket.id}`);
+    for (let code in lobbies) {
+      let lobby = lobbies[code];
+      if (lobby.players[socket.id]) {
+        console.log(`${lobby.players[socket.id].name} removed from lobby ${code}`);
+        delete lobby.players[socket.id];
+        io.to(code).emit('lobbyUpdate', getPlayersListString(lobby));
+      }
+      // If the TV host disconnects, close the lobby.
+      if (lobby.tvSocketId === socket.id) {
+        console.log(`TV host left. Closing lobby ${code}.`);
+        io.to(code).emit('lobbyClosed', { message: "Lobby closed by host." });
+        delete lobbies[code];
+      }
+    }
+    logServerStats();
   });
 });
 
-// Functie om een spelronde te starten
-function startRound() {
-  const roundDuration = 60000; // 60 seconden
-  const delay = Math.floor(Math.random() * 7000) + 3000; // Tussen 3 en 10 seconden
+// Helper: Get a comma-separated list of player names in a lobby.
+function getPlayersListString(lobby) {
+  let names = [];
+  for (let id in lobby.players) {
+    names.push(lobby.players[id].name);
+  }
+  return names.join(',');
+}
+
+// Helper: Find the lobby that contains a given socket id.
+function getLobbyBySocket(socketId) {
+  for (let code in lobbies) {
+    if (lobbies[code].players[socketId]) {
+      return lobbies[code];
+    }
+  }
+  return null;
+}
+
+// Function to start a game round in a given lobby.
+function startRound(lobby) {
+  const roundDuration = 60000; // 60 seconds of gameplay
+  const delay = Math.floor(Math.random() * 7000) + 3000; // delay between 3 and 10 seconds
+
   setTimeout(() => {
-    const isOrange = Math.random() < 0.5;
-    currentBlock = isOrange ? 'orange' : 'decoy';
-    blockActive = true;
-    io.emit('blockAppear', { type: currentBlock });
-    console.log(`Blok verschijnt: ${currentBlock}`);
-    
-    // Het blok blijft 2 seconden actief
-    blockTimeout = setTimeout(() => {
-      blockActive = false;
-      io.emit('blockDisappear', { type: currentBlock });
-      console.log(`Blok verdwijnt: ${currentBlock}`);
-      if (gameStarted) {
-        startRound();
-      }
-    }, 2000);
+    lobby.currentBlock = (Math.random() < 0.5) ? "orange" : "decoy";
+    lobby.blockActive = true;
+    io.to(lobby.code).emit('blockAppear', { blockType: lobby.currentBlock });
+    console.log(`Lobby ${lobby.code}: Block appears: ${lobby.currentBlock}`);
+
+    lobby.blockTimeout = setTimeout(() => {
+      lobby.blockActive = false;
+      io.to(lobby.code).emit('blockDisappear', { blockType: lobby.currentBlock });
+      console.log(`Lobby ${lobby.code}: Block disappears: ${lobby.currentBlock}`);
+      if (lobby.gameStarted) startRound(lobby);
+    }, 2000); // Block visible for 2 seconds
   }, delay);
-  
-  // Na de ronde stopt het spel en worden de scores verzonden
+
+  // End the round after roundDuration
   setTimeout(() => {
-    gameStarted = false;
-    io.emit('roundEnded', players);
-    console.log('Ronde beëindigd. Finale scores:', players);
+    lobby.gameStarted = false;
+    io.to(lobby.code).emit('roundEnded', lobby.players);
+    console.log(`Lobby ${lobby.code}: Round ended. Final scores:`, lobby.players);
   }, roundDuration);
 }
 
-// Start de server op poort 3000
-server.listen(3000, () => {
-  console.log('Server luistert op poort 3000');
-  console.log("Typ 'mklobby' in de console om een nieuwe lobby te genereren.");
-});
-
-// Voeg een console-commando toe zodat je vanuit de terminal een lobby kunt genereren
+// --- Console Command Functionality ---
+// Commands: 
+//    emit <eventName> [jsonPayload]  -> Emit an event to all clients
+//    stats                           -> Display server stats
 process.stdin.resume();
 process.stdin.setEncoding('utf8');
-
 process.stdin.on('data', (input) => {
-  const command = input.trim();
-  if (command === 'mklobby') {
-    currentLobbyCode = generateLobbyId();
-    console.log(`Nieuwe lobby gegenereerd via console: ${currentLobbyCode}`);
-  } else if (command === 'startgame') {
-    startRound();
+  input = input.trim();
+  if (input.length === 0) return;
+  let parts = input.split(' ');
+  if (parts[0] === "emit") {
+    if (parts.length < 2) {
+      console.log("Usage: emit <eventName> [jsonPayload]");
+      return;
+    }
+    let eventName = parts[1];
+    let payload = {};
+    if (parts.length > 2) {
+      let eventIndex = input.indexOf(eventName);
+      let jsonPart = input.substring(eventIndex + eventName.length).trim();
+      try {
+        payload = JSON.parse(jsonPart);
+      } catch (e) {
+        console.log("Invalid JSON payload:", e);
+        return;
+      }
+    }
+    console.log(`Emitting event '${eventName}' with payload:`, payload);
+    io.emit(eventName, payload);
+  } else if (parts[0] === "stats") {
+    let lobbyCount = Object.keys(lobbies).length;
+    let totalPlayers = 0;
+    for (let code in lobbies) {
+      totalPlayers += Object.keys(lobbies[code].players).length;
+    }
+    console.log(`Server Stats: ${lobbyCount} active lobby(ies), ${totalPlayers} player(s) connected.`);
+  } else {
+    console.log(`Unknown command. Use "emit <eventName> [jsonPayload]" or "stats".`);
   }
-  else {
-    console.log(`Onbekend commando: ${command}`);
-  }
+});
+
+server.listen(port, () => {
+  console.log(`Server listening on port ${port}`);
+  console.log("Type commands in the console to emit events or 'stats' to view server statistics.");
 });
