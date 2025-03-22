@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES6", // Use ES6 for frontend
+    "module": "ESNext", // Use ESNext for browser-compatible modules
+    "moduleResolution": "Node", // Resolve modules correctly
+    "outDir": "./public", // Output directory for compiled frontend files
+    "rootDir": "./public", // Root directory for frontend files
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": [
+    "public/**/*.ts" // Include only frontend files
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}

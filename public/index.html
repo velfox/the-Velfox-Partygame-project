@@ -1,18 +1,18 @@
 <!DOCTYPE html>
-<html lang="nl">
+<html lang="en">
+
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Game SPA</title>
-  <link rel="stylesheet" href="style.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js" crossorigin="anonymous"></script>
+    <script src="app.bundle.js" type="module"></script> <!-- Use the bundled file -->
+    <title>PaRtIfOx</title>
 </head>
+
 <body>
-  <!-- Container waar de scenes dynamisch in worden geladen -->
-  <div id="app"></div>
-  
-  <!-- Laad de Socket.IO client vanaf de Node.js-server op poort 3000 -->
-  <script src="http://localhost:3000/socket.io/socket.io.js"></script>
-  <!-- Hoofdscript voor de SPA -->
-  <script src="app.js"></script>
+    <!-- App container where scenes will be loaded -->
+    <div id="app"></div>
 </body>
+
 </html>
